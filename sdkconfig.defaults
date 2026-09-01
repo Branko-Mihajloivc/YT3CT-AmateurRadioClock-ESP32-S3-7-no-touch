@@ -1,0 +1,125 @@
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_FREERTOS_HZ=1000
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+# Disabled 2026-09-01 (see the later comment near
+# CONFIG_SPIRAM_FETCH_INSTRUCTIONS for why) -- this option `select`s
+# SPIRAM_FETCH_INSTRUCTIONS and SPIRAM_RODATA unconditionally, which
+# silently overrode that later "is not set" the first time this was
+# tried (Kconfig `select` always wins over a plain default). Disabling
+# it here too is what actually turns both off.
+# CONFIG_SPIRAM_XIP_FROM_PSRAM is not set
+CONFIG_SPIRAM_MEMTEST=n
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# Halved from the vendor demo's 64KB default -- GeochronClock's own UI is
+# ~40 simple labels + one canvas (whose big pixel buffers are already
+# separately in PSRAM via heap_caps_malloc, not LVGL's own pool), nowhere
+# near enough to need 64KB. Freed room was needed: WiFi's own init wants
+# more internal (non-PSRAM) RAM than was available once this pool, the
+# RGB panel's DMA bounce buffer, and other early allocations had already
+# claimed their share of ESP32-S3's comparatively small internal SRAM.
+CONFIG_LV_MEM_SIZE_KILOBYTES=32
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_DEF_REFR_PERIOD=15
+CONFIG_LV_OBJ_STYLE_CACHE=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
+CONFIG_LV_COLOR_DEPTH_16=y
+# lv_demo_widgets() was only used by the vendor demo's main.c -- this
+# project builds its own UI and never calls it, and the module itself
+# refuses to compile below a 38KB pool (irrelevant to us either way).
+# CONFIG_LV_USE_DEMO_WIDGETS is not set
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+# GeochronClock's top bar and boot screen need 30/48pt -- not enabled by
+# the vendor demo's defaults.
+CONFIG_LV_FONT_MONTSERRAT_30=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+# CONFIG_LV_MEM_CUSTOM is not set
+# CONFIG_LV_USE_FONT_COMPRESSED is not set
+# CONFIG_LV_USE_IMGFONT is not set
+# CONFIG_LV_COLOR_SCREEN_TRANSP is not set
+# CONFIG_LV_USE_LOG is not set
+# CONFIG_LV_LOG_PRINTF is not set
+# CONFIG_LV_USE_PERF_MONITOR is not set
+# CONFIG_LV_USE_DEMO_BENCHMARK is not set
+# CONFIG_LV_USE_DEMO_STRESS is not set
+# CONFIG_LV_USE_DEMO_MUSIC is not set
+# CONFIG_LV_DEMO_MUSIC_AUTO_PLAY is not set
+
+
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_BOOTLOADER_FLASH_DC_AWARE=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_120M=y
+CONFIG_SPI_FLASH_HPM_ENA=y
+
+CONFIG_SPIRAM_SPEED_120M=y
+CONFIG_SPIRAM_TIMING_MEASURE_TEMPERATURE_INTERVAL_SECOND=5
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# Disabled 2026-09-01 -- these map the app's own instructions/rodata into
+# PSRAM (inherited from the vendor demo's performance-tuned defaults),
+# which also makes ESP-IDF register the small leftover "alignment gap"
+# at the end of the last PSRAM MMU page as extra heap
+# (esp_psram_extram_add_to_heap_allocator(), esp_psram.c). That gap's
+# size is extremely sensitive to the app's *total* rodata size -- adding
+# beacon_panel.cpp's ~300 bytes of const data shifted it just enough to
+# fall below TLSF's minimum pool size, which crashed tlsf_add_pool()'s
+# own error-logging printf() (itself too early in boot for the stdio
+# lock to be ready yet) in a hard crash-reboot loop. Confirmed via
+# addr2line against the actual crash backtrace, not guessed. Disabling
+# both removes the alignment-gap heap registration entirely, so future
+# small code/data changes can't hit this same wall again by coincidence.
+# CONFIG_SPIRAM_FETCH_INSTRUCTIONS is not set
+# CONFIG_SPIRAM_RODATA is not set
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=64
+
+# mbedTLS's default allocation mode (MBEDTLS_INTERNAL_MEM_ALLOC) puts its
+# TLS in/out buffers (16KB + 4KB per connection, see
+# MBEDTLS_SSL_IN_CONTENT_LEN/MBEDTLS_SSL_OUT_CONTENT_LEN below) in
+# internal RAM only -- confirmed via HTTP_EVENT_ERROR diagnostics as the
+# actual cause of solar_conditions.cpp's HTTPS connect failures
+# (mbedtls_ssl_setup() returning MBEDTLS_ERR_SSL_ALLOC_FAILED): internal
+# RAM is too fragmented for a 16KB block once WiFi + LVGL + the RGB
+# panel's DMA buffers have already claimed their share. Moving mbedTLS's
+# allocations to PSRAM (the Kconfig's own documented alternative for
+# exactly this situation) fixes it.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# solar_conditions.cpp's HTTPS-fetch task needs an 8KB stack for
+# mbedTLS's handshake/parsing depth. Internal SRAM is tight and
+# fragmented enough (WiFi + LVGL + the RGB panel's DMA buffers all
+# compete for it) that a contiguous 8KB block often isn't available by
+# the time this task is created -- xTaskCreatePinnedToCore() silently
+# failed here (its return value wasn't checked), so band conditions
+# never populated. Allows that task's stack specifically to live in
+# PSRAM instead (see the static task creation in solar_conditions.cpp).
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
+# GeochronClock uses two NTP servers (primary + fallback), matching the
+# Arduino build's NTP_SERVER_1/NTP_SERVER_2 in config.h.
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
+
+# This board actually has 8MB flash (confirmed via the Arduino build's
+# FlashSize=8M), not the 2MB the vendor demo's defaults assumed. Custom
+# partition table (see partitions.csv) with a 4MB app partition -- the
+# built-in "single app (large)" template only gave 1500K, which stayed
+# tight enough all night (down to 3% free) that adding beacon_panel.cpp
+# (~1.5KB) shifted the app's PSRAM-mapped code/rodata footprint just
+# enough to make tlsf_add_pool() reject the leftover PSRAM heap region
+# at boot -- a real, hard-to-predict crash, not a logic bug in that
+# file. 4MB gives real headroom instead of re-fighting this same wall
+# for every future feature.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y

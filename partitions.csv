@@ -1,0 +1,14 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+#
+# This board has 8MB of physical flash, but the vendor demo's default
+# partition table (and later, single_app_large) only ever allocated
+# 1500K to the app -- barely enough for WiFi+TLS+HTTP+RMT, and tight
+# enough that a small addition (beacon_panel.cpp, ~1.5KB) shifted the
+# app's PSRAM-mapped code/rodata footprint just enough to make
+# tlsf_add_pool() reject the leftover PSRAM heap region at boot (a
+# genuine, hard-to-predict crash -- see the ESP-IDF port memory notes).
+# 4MB gives comfortable headroom against that recurring, so no need to
+# keep re-fighting this same wall for every future feature.
+nvs,      data, nvs,     ,        0x6000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        4000K,
