@@ -48,6 +48,7 @@ extern "C" {
 #include "city_clocks.h"
 #include "solar_conditions.h"
 #include "beacon_panel.h"
+#include "range_rings.h"
 #include "env_sensor.h"
 #include "wifi_manager.h"
 #include "config.h"
@@ -389,6 +390,7 @@ extern "C" void app_main(void)
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         lv_obj_clean(lv_scr_act()); // drop the boot screen's labels before building the real UI
         map_ok = daynight_map_init(lv_scr_act(), MAP_X, MAP_Y, sd_ok);
+        range_rings_init(lv_scr_act());
         build_ui(map_ok);
         esp_lv_adapter_unlock();
     }
