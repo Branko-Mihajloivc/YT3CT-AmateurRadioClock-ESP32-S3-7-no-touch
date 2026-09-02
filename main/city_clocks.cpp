@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct City {
     const char *name;
@@ -38,6 +39,7 @@ static long s_utc_offset_sec[NUM_CITIES];      // this city's local time minus U
 // the last few bytes, which happened to be the sunset minutes and the
 // closing "#". Sized with real headroom this time.
 static char s_sun_str[NUM_CITIES][40];
+static int s_knjazevac_x = 0; // set in city_clocks_init(), see city_clocks_get_knjazevac_x()
 
 // Converts a UTC calendar date/time to a Unix epoch time_t using Howard
 // Hinnant's days_from_civil algorithm, instead of relying on timegm()
@@ -133,6 +135,7 @@ void city_clocks_init(lv_obj_t *parent, int x, int y, int w, int h) {
 
     for (int i = 0; i < NUM_CITIES; i++) {
         int col_center_x = x + col_w * i + col_w / 2;
+        if (strcmp(CITIES[i].name, "Knjazevac") == 0) s_knjazevac_x = col_center_x;
         s_last_shown_minute[i] = -1;
         snprintf(s_sun_str[i], sizeof(s_sun_str[i]), "#ffc850 %s--:-- %s--:--#",
                  LV_SYMBOL_UP, LV_SYMBOL_DOWN);
@@ -221,4 +224,8 @@ void city_clocks_update_sun_times(const struct tm *utc) {
         set_combined_text(i, local_tm.tm_hour, local_tm.tm_min);
         s_last_shown_minute[i] = local_tm.tm_hour * 60 + local_tm.tm_min;
     }
+}
+
+int city_clocks_get_knjazevac_x(void) {
+    return s_knjazevac_x;
 }

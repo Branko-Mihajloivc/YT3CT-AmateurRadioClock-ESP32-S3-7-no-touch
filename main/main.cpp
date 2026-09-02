@@ -70,6 +70,7 @@ static const int MAP_Y = 0;
 
 static lv_obj_t *local_time_label;
 static lv_obj_t *utc_time_label;
+static lv_obj_t *date_label;
 static lv_obj_t *wifi_status_label;
 
 // Same dark translucent highlight box style as the bottom bar's city
@@ -145,6 +146,8 @@ static void show_boot_screen() {
         if (esp_lv_adapter_lock(100) == ESP_OK) {
             lv_obj_invalidate(lv_scr_act());
             esp_lv_adapter_unlock();
+        } else {
+            ESP_LOGW(TAG, "lock timeout at boot-screen invalidate #%d", i);
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -155,33 +158,32 @@ static void build_ui(bool map_ok) {
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
 
-    // ---- top bar: callsign | LOC <time> | UTC <time> | Temp | WiFi ----
-    lv_obj_t *callsign_label = lv_label_create(scr);
-    lv_obj_set_style_text_color(callsign_label, lv_color_white(), 0);
-#if LV_FONT_MONTSERRAT_48
-    lv_obj_set_style_text_font(callsign_label, &lv_font_montserrat_48, 0);
-    lv_obj_set_pos(callsign_label, 20, 8);
-#elif LV_FONT_MONTSERRAT_30
-    lv_obj_set_style_text_font(callsign_label, &lv_font_montserrat_30, 0);
-    lv_obj_set_pos(callsign_label, 20, 20);
-#else
-    lv_obj_set_pos(callsign_label, 20, 20);
-#endif
-    lv_label_set_text(callsign_label, CALLSIGN);
-    apply_highlight(callsign_label);
-
+    // ---- top bar: DATE | LOC <time> | UTC <time> | Temp | WiFi ----
+    // Callsign moved out to its own spot centered over Knjazevac (the
+    // QTH), above the bottom bar -- see below. It was the single widest
+    // element here (48pt), and callsign+date+LOC+UTC+Temp+WiFi together
+    // never fit in 1024px on real hardware; swapping it for a shorter
+    // date group in the same slot freed enough room.
 #if LV_FONT_MONTSERRAT_30
 #define TOP_BAR_FONT &lv_font_montserrat_30
 #else
 #define TOP_BAR_FONT NULL
 #endif
 
-    // Everything after the callsign is chained with align_to off the
-    // PREVIOUS element's actual rendered right edge instead of a
-    // hand-picked absolute x -- see the Arduino build's history for why.
-    // Each time label is temporarily filled with "23:59:59" (real digits,
-    // wider than the "--:--:--" placeholder) while the NEXT element's
-    // position is measured off it, then reset back to the placeholder.
+    date_label = lv_label_create(scr);
+    lv_obj_set_style_text_color(date_label, lv_color_white(), 0);
+    if (TOP_BAR_FONT) lv_obj_set_style_text_font(date_label, TOP_BAR_FONT, 0);
+    lv_obj_set_pos(date_label, 20, 20);
+    lv_label_set_text(date_label, "02.09.2026"); // real sample text for measurement, same trick the time labels below use
+    apply_highlight(date_label);
+
+    // Everything after date is chained with align_to off the PREVIOUS
+    // element's actual rendered right edge instead of a hand-picked
+    // absolute x -- see the Arduino build's history for why. Each time
+    // label is temporarily filled with "23:59:59" (real digits, wider
+    // than the "--:--:--" placeholder) while the NEXT element's position
+    // is measured off it, then reset back to the placeholder -- date
+    // gets the same treatment below, once loc_suffix has aligned off it.
     static const int GROUP_GAP = 35;
     static const int LABEL_GAP = 8;
 
@@ -190,7 +192,8 @@ static void build_ui(bool map_ok) {
     if (TOP_BAR_FONT) lv_obj_set_style_text_font(loc_suffix, TOP_BAR_FONT, 0);
     lv_label_set_text(loc_suffix, "LOC");
     apply_highlight(loc_suffix);
-    lv_obj_align_to(loc_suffix, callsign_label, LV_ALIGN_OUT_RIGHT_MID, GROUP_GAP, 0);
+    lv_obj_align_to(loc_suffix, date_label, LV_ALIGN_OUT_RIGHT_MID, GROUP_GAP, 0);
+    lv_label_set_text(date_label, "--- -- ---"); // now safe to reset -- loc_suffix already measured off the real sample text above
 
     local_time_label = lv_label_create(scr);
     lv_obj_set_style_text_color(local_time_label, lv_color_white(), 0);
@@ -247,6 +250,34 @@ static void build_ui(bool map_ok) {
     // ---- bottom bar: city clocks ----
     city_clocks_init(scr, 0, 600 - BOTTOM_BAR_H, 1024, BOTTOM_BAR_H);
 
+    // ---- callsign, centered over the Knjazevac city-clock column, just
+    // above the bottom bar ---- moved out of the top bar to make room for
+    // the date field there (see the top-bar comment above). Same 48pt
+    // size as before, just relocated. Centered on
+    // city_clocks_get_knjazevac_x() (the column's real on-screen center,
+    // from city_clocks_init() just above) rather than Knjazevac's actual
+    // lat/lon -- city_clocks.cpp lays out cities in equal-width columns by
+    // index, not by true longitude, so the two don't match (confirmed on
+    // real hardware: geographic placement put this visibly right of the
+    // "Knjazevac" label itself). Static content (never changes at
+    // runtime), so this is positioned once here rather than needing
+    // refresh_clocks() to touch it.
+    {
+        lv_obj_t *callsign_label = lv_label_create(scr);
+        lv_obj_set_style_text_color(callsign_label, lv_color_white(), 0);
+#if LV_FONT_MONTSERRAT_48
+        lv_obj_set_style_text_font(callsign_label, &lv_font_montserrat_48, 0);
+#elif LV_FONT_MONTSERRAT_30
+        lv_obj_set_style_text_font(callsign_label, &lv_font_montserrat_30, 0);
+#endif
+        lv_label_set_text(callsign_label, CALLSIGN);
+        apply_highlight(callsign_label);
+        lv_obj_update_layout(callsign_label);
+        int callsign_w = lv_obj_get_width(callsign_label);
+        int callsign_h = lv_obj_get_height(callsign_label);
+        lv_obj_set_pos(callsign_label, city_clocks_get_knjazevac_x() - callsign_w / 2, (600 - BOTTOM_BAR_H) - callsign_h - 10);
+    }
+
     // ---- SD-card-missing warning ----
     lv_obj_t *status_label = lv_label_create(scr);
     lv_obj_set_style_text_color(status_label, lv_color_make(255, 90, 90), 0);
@@ -277,19 +308,23 @@ static void refresh_clocks() {
     struct tm local_tm;
     localtime_r(&now, &local_tm);
 
-    char utc_buf[16], local_buf[16];
+    char utc_buf[16], local_buf[16], date_buf[16];
     strftime(utc_buf, sizeof(utc_buf), "%H:%M:%S", &utc_tm);
     strftime(local_buf, sizeof(local_buf), "%H:%M:%S", &local_tm);
+    strftime(date_buf, sizeof(date_buf), "%d.%m.%Y", &local_tm); // e.g. "02.09.2026" -- local date, matches LOC time
     bool wifi_ok = wifi_manager_is_connected();
 
     if (esp_lv_adapter_lock(200) == ESP_OK) {
         lv_label_set_text(utc_time_label, utc_buf);
         lv_label_set_text(local_time_label, local_buf);
+        lv_label_set_text(date_label, date_buf);
         lv_obj_set_style_text_color(wifi_status_label,
             wifi_ok ? lv_color_make(120, 220, 120) : lv_color_make(255, 90, 90), 0);
         city_clocks_tick(now);
         beacon_panel_update(now); // cheap -- fine every second even though the schedule only changes every 10s
         esp_lv_adapter_unlock();
+    } else {
+        ESP_LOGW(TAG, "lock timeout at refresh_clocks (per-second tick)");
     }
 }
 

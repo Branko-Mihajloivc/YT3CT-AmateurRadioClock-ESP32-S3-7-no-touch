@@ -182,6 +182,8 @@ static void read_and_update() {
     if (esp_lv_adapter_lock(200) == ESP_OK) {
         lv_label_set_text(s_label, buf);
         esp_lv_adapter_unlock();
+    } else {
+        ESP_LOGW(TAG, "lock timeout at temp/humidity label update");
     }
 }
 

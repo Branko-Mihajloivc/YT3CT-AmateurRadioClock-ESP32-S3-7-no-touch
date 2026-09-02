@@ -439,6 +439,8 @@ static void poll_once() {
             }
         }
         esp_lv_adapter_unlock();
+    } else {
+        ESP_LOGW(TAG, "lock timeout at band-conditions label update");
     }
 }
 

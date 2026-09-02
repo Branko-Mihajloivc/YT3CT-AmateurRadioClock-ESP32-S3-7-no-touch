@@ -35,3 +35,13 @@ void city_clocks_tick(time_t now);
  * need any faster.
  */
 void city_clocks_update_sun_times(const struct tm *utc);
+
+/**
+ * Screen x-coordinate of the Knjazevac column's center, as actually laid
+ * out by city_clocks_init() (equal-width columns by index, not projected
+ * from its real lat/lon -- the two don't match). Only valid after
+ * city_clocks_init() has run. Lets other UI (e.g. the callsign) align to
+ * where "Knjazevac" is really drawn on screen instead of duplicating this
+ * module's column-layout math.
+ */
+int city_clocks_get_knjazevac_x(void);

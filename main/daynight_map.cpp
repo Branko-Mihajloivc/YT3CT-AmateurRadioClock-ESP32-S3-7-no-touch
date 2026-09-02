@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -257,6 +258,8 @@ static void map_task(void *arg) {
         if (esp_lv_adapter_lock(200) == ESP_OK) {
             lv_obj_invalidate(s_canvas);
             esp_lv_adapter_unlock();
+        } else {
+            printf("daynight_map: lock timeout at canvas invalidate (uptime %lld ms)\n", (long long)(esp_timer_get_time() / 1000));
         }
         city_clocks_update_sun_times(&utc_tm); // same once-a-minute cadence as the terminator; own brief lock use internally
 
@@ -272,6 +275,8 @@ static void map_task(void *arg) {
             if (esp_lv_adapter_lock(100) == ESP_OK) {
                 lv_obj_invalidate(lv_scr_act());
                 esp_lv_adapter_unlock();
+            } else {
+                printf("daynight_map: lock timeout at full-screen invalidate #%d (uptime %lld ms)\n", i, (long long)(esp_timer_get_time() / 1000));
             }
             vTaskDelay(pdMS_TO_TICKS(20));
         }
