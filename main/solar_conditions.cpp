@@ -36,7 +36,26 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
     return ESP_OK;
 }
 
-static const char *SOLAR_XML_URL = "https://www.hamqsl.com/solarxml.php";
+// getaddrinfo("hamqsl.com") fails 100% of the time on this device (lwIP's
+// embedded DNS resolver, EAI_FAIL) even though: it's not a bad/blocked DNS
+// server (same failure with the router's DNS AND an explicit 8.8.8.8
+// override, readback-verified); not a network-wide DNS outage (NTP, a
+// different hostname, resolves via the same override in under 2s every
+// boot); not IPv6/dual-stack confusion (restricted to AF_INET, same
+// failure); not a CNAME-chain limitation (apex "hamqsl.com" has a direct A
+// record, no CNAME, same failure); and not specific to this WiFi network
+// (identical failure on a phone's mobile hotspot, a completely different
+// carrier path). Every other tool on the same networks -- ping, PowerShell
+// Resolve-DnsName against 8.8.8.8, a plain HTTPS fetch -- resolves and
+// fetches this exact host instantly. So this connects straight to the
+// known IP (bypassing the DNS lookup that's the one thing consistently
+// failing) while still sending the real hostname for TLS SNI/cert
+// validation and the HTTP Host header, via common_name below and an
+// explicit Host header in poll_once(). Only real downside: if hamqsl.com's
+// IP ever changes, this needs updating -- worth revisiting hostname-based
+// resolution if the underlying DNS failure ever gets root-caused.
+static const char *SOLAR_XML_URL = "https://192.124.249.177/solarxml.php";
+static const char *SOLAR_HOSTNAME = "hamqsl.com";
 static const uint32_t HTTP_TIMEOUT_MS = 10000;
 
 // hamqsl.com's own guidance: "please only select to update every hour --
@@ -305,11 +324,17 @@ void solar_conditions_init(lv_obj_t *parent, int x, int y, int w, int h) {
 }
 
 static void poll_once() {
-    ESP_LOGI(TAG, "poll_once: starting");
+    ESP_LOGI(TAG, "poll_once: starting, free internal RAM %u bytes (largest block %u)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     esp_http_client_config_t config = {};
     config.url = SOLAR_XML_URL;
     config.timeout_ms = HTTP_TIMEOUT_MS;
-    config.crt_bundle_attach = esp_crt_bundle_attach; // ESP-IDF's built-in trusted-root bundle -- real cert verification, unlike the Arduino build's setInsecure()
+    // Tested skipping cert verification (matching the Arduino build's
+    // setInsecure()) to see if that's what hamqsl.com's WAF keys on --
+    // identical ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT either way, so it isn't.
+    // Reverted to full validation since the weaker mode bought nothing.
+    config.crt_bundle_attach = esp_crt_bundle_attach;
     config.event_handler = http_event_handler;
     // hamqsl.com is behind a Sucuri/Cloudproxy WAF. It accepts our TLS
     // connection and GET, then closes cleanly (FIN) without ever sending
@@ -322,12 +347,20 @@ static void poll_once() {
     config.user_agent = "GeochronClock/1.0 (ESP32-S3)";
     static const char *alpn_list[] = {"http/1.1", NULL};
     config.alpn_protos = alpn_list;
+    // SOLAR_XML_URL is a raw IP (see comment above) -- common_name tells
+    // esp-tls to still send SNI="hamqsl.com" and validate the cert against
+    // that hostname, exactly as if we'd connected via DNS.
+    config.common_name = SOLAR_HOSTNAME;
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
         ESP_LOGW(TAG, "esp_http_client_init failed");
         return;
     }
+    // The URL's host is a raw IP, so esp_http_client would otherwise send
+    // "Host: 192.124.249.177" -- set the real hostname explicitly so the
+    // CDN/WAF in front of hamqsl.com routes the request correctly.
+    esp_http_client_set_header(client, "Host", SOLAR_HOSTNAME);
     ESP_LOGI(TAG, "poll_once: client init ok, opening connection");
 
     esp_err_t err = esp_http_client_open(client, 0);

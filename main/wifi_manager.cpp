@@ -19,11 +19,57 @@ static EventGroupHandle_t s_wifi_event_group;
 static const int CONNECTED_BIT = BIT0;
 static volatile bool s_connected = false;
 static bool s_sntp_started = false;
+static esp_netif_t *s_sta_netif = NULL;
+
+// Plain esp_wifi_connect() retries alone weren't enough to recover from a
+// real disconnect (confirmed on real hardware: WiFi went red and stayed
+// disconnected -- state cycling init->auth->init every ~3s -- until the
+// device was power-cycled; a fresh esp_wifi_init() cleared it every time,
+// but the retry loop below never did). That's the classic signature of
+// the WiFi driver getting stuck in a state esp_wifi_connect() alone can't
+// clear -- needs a full stack restart. Rather than requiring a manual
+// power cycle, do that restart automatically after enough consecutive
+// failures.
+static int s_disconnect_count = 0;
+static const int WIFI_RESTART_THRESHOLD = 15; // ~15 retries at the driver's own ~3-4s reconnect cadence, roughly 50-60s of continuous disconnection
+
+// solar_conditions' hamqsl.com fetch fails 100% of the time with a DNS
+// lookup error (esp-tls: getaddrinfo() returns 202 = EAI_FAIL) even though
+// the same hostname resolves fine from a PC -- but that PC test was over a
+// completely different network path (wired ISP connection, its own DNS
+// servers), not this WiFi link. The ESP32 has no DNS override and just
+// takes whatever this WiFi network's own DHCP hands it, which is a
+// plausible culprit for a resolver that's broken/restrictive for this one
+// domain even though basic connectivity (ping, WiFi assoc) works fine.
+// Force a known-good public resolver instead of trusting the WiFi
+// network's own DNS.
+static void apply_public_dns() {
+    if (!s_sta_netif) return;
+    esp_netif_dns_info_t dns;
+    dns.ip.type = ESP_IPADDR_TYPE_V4;
+    dns.ip.u_addr.ip4.addr = ESP_IP4TOADDR(8, 8, 8, 8);
+    esp_err_t e1 = esp_netif_set_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
+    dns.ip.u_addr.ip4.addr = ESP_IP4TOADDR(8, 8, 4, 4);
+    esp_err_t e2 = esp_netif_set_dns_info(s_sta_netif, ESP_NETIF_DNS_BACKUP, &dns);
+
+    esp_netif_dns_info_t check;
+    esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &check);
+    ESP_LOGI(TAG, "apply_public_dns: set main=%s backup=%s, readback main=" IPSTR,
+             esp_err_to_name(e1), esp_err_to_name(e2), IP2STR(&check.ip.u_addr.ip4));
+}
+
+// Diagnostic for the "is DNS broken network-wide or just for hamqsl.com"
+// question -- NTP_SERVER_1/2 are hostnames too, so if this never fires,
+// nothing on this WiFi network can resolve external domains at all.
+static void on_sntp_sync(struct timeval *tv) {
+    ESP_LOGI(TAG, "SNTP time sync received: tv_sec=%ld", (long)tv->tv_sec);
+}
 
 static void start_sntp_once() {
     if (s_sntp_started) return;
     s_sntp_started = true;
     esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(2, ESP_SNTP_SERVER_LIST(NTP_SERVER_1, NTP_SERVER_2));
+    sntp_config.sync_cb = on_sntp_sync;
     ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp_config));
 }
 
@@ -34,13 +80,23 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
         xEventGroupClearBits(s_wifi_event_group, CONNECTED_BIT);
-        ESP_LOGW(TAG, "WiFi disconnected, retrying...");
-        esp_wifi_connect(); // keep retrying in the background, same as the Arduino build's loop() check
+        s_disconnect_count++;
+        ESP_LOGW(TAG, "WiFi disconnected (attempt %d), retrying...", s_disconnect_count);
+        if (s_disconnect_count >= WIFI_RESTART_THRESHOLD) {
+            ESP_LOGW(TAG, "Still disconnected after %d attempts -- restarting the WiFi stack", s_disconnect_count);
+            s_disconnect_count = 0;
+            esp_wifi_stop();
+            esp_wifi_start(); // re-triggers WIFI_EVENT_STA_START below, which calls esp_wifi_connect() again
+        } else {
+            esp_wifi_connect(); // keep retrying in the background, same as the Arduino build's loop() check
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "WiFi connected, IP=" IPSTR, IP2STR(&event->ip_info.ip));
         s_connected = true;
+        s_disconnect_count = 0;
         xEventGroupSetBits(s_wifi_event_group, CONNECTED_BIT);
+        apply_public_dns(); // DHCP just (re)set its own DNS servers -- override them every time, not just once
         start_sntp_once(); // only needs doing once -- SNTP keeps itself in sync afterward
     }
 }
@@ -57,7 +113,7 @@ void wifi_manager_init(void) {
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    s_sta_netif = esp_netif_create_default_wifi_sta();
 
     ESP_LOGI(TAG, "free internal RAM before esp_wifi_init(): %u bytes (largest block: %u)",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -77,6 +133,17 @@ void wifi_manager_init(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Default modem-sleep power save periodically sends null-data-frame
+    // keepalives to the AP; on a flaky link those retry in a tight ~100ms
+    // loop for tens of seconds at a time (seen in the serial log as a burst
+    // of "wifi:...null" warnings). This is a mains-powered clock, not a
+    // battery device, so there's nothing to gain from power save -- and
+    // this project has already learned the hard way (see the Arduino->
+    // ESP-IDF port) that any sustained periodic radio/bus activity can
+    // contend with the RGB panel's PSRAM-DMA scan-out and show up as a
+    // visible glitch. Disable it outright.
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     ESP_LOGI(TAG, "Connecting to WiFi '%s'...", WIFI_SSID);
     // Block up to ~20s for the first connect, matching the Arduino build's
