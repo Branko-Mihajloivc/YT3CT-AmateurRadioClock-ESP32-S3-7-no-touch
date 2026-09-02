@@ -25,7 +25,26 @@ static lv_obj_t *s_canvas = NULL;
 static uint16_t *s_base_buf = NULL; // pristine map, loaded once
 static uint16_t *s_work_buf = NULL; // what's actually displayed (bound to the LVGL canvas)
 
+// Precomputed per-row/per-column trig for compute_terminator()'s inner
+// loop (a handful of multiply-adds instead of calling sin/cos 614,400
+// times). Used to be plain `static float array[N]` -- harmless on its own,
+// but combined with this task's own internal-RAM stack (see
+// xTaskCreatePinnedToCore below) it was part of what pushed internal RAM
+// low enough to make solar_conditions' HTTPS fetch start silently timing
+// out (see the isolation test in project memory/commit history). Moved to
+// PSRAM like the map's pixel buffers already were.
+static float *s_sinLatRow = NULL;
+static float *s_cosLatRow = NULL;
+static float *s_cosLonCol = NULL;
+static float *s_sinLonCol = NULL;
+
 static void map_task(void *arg); // defined below daynight_map_init(), which starts it
+
+// map_task's own stack, PSRAM-backed for the same reason as the trig
+// tables above -- see the comment there.
+static const size_t MAP_TASK_STACK_BYTES = 8192;
+static StackType_t *s_map_task_stack = NULL;
+static StaticTask_t s_map_task_tcb;
 
 // Stagger vs env_sensor.h's DHT task (10s first read, 30s cadence) and
 // solar_conditions.h's fetch task (15s first fetch, 3600s cadence) -- all
@@ -83,9 +102,23 @@ static bool load_base_map_from_sd() {
 bool daynight_map_init(lv_obj_t *parent, int x, int y, bool sd_available) {
     s_base_buf = (uint16_t *)heap_caps_malloc((size_t)W * H * 2, MALLOC_CAP_SPIRAM);
     s_work_buf = (uint16_t *)heap_caps_malloc((size_t)W * H * 2, MALLOC_CAP_SPIRAM);
-    if (!s_base_buf || !s_work_buf) {
+    s_sinLatRow = (float *)heap_caps_malloc((size_t)H * sizeof(float), MALLOC_CAP_SPIRAM);
+    s_cosLatRow = (float *)heap_caps_malloc((size_t)H * sizeof(float), MALLOC_CAP_SPIRAM);
+    s_cosLonCol = (float *)heap_caps_malloc((size_t)W * sizeof(float), MALLOC_CAP_SPIRAM);
+    s_sinLonCol = (float *)heap_caps_malloc((size_t)W * sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!s_base_buf || !s_work_buf || !s_sinLatRow || !s_cosLatRow || !s_cosLonCol || !s_sinLonCol) {
         printf("daynight_map: PSRAM allocation failed\n");
         return false;
+    }
+    for (int y2 = 0; y2 < H; y2++) {
+        float lat = deg2radf(90.0f - ((float)y2 + 0.5f) / H * 180.0f);
+        s_sinLatRow[y2] = sinf(lat);
+        s_cosLatRow[y2] = cosf(lat);
+    }
+    for (int x2 = 0; x2 < W; x2++) {
+        float lon = deg2radf(((float)x2 + 0.5f) / W * 360.0f - 180.0f);
+        s_cosLonCol[x2] = cosf(lon);
+        s_sinLonCol[x2] = sinf(lon);
     }
 
     bool ok = false;
@@ -105,7 +138,13 @@ bool daynight_map_init(lv_obj_t *parent, int x, int y, bool sd_available) {
     lv_canvas_set_buffer(s_canvas, s_work_buf, W, H, LV_IMG_CF_TRUE_COLOR);
     lv_obj_set_pos(s_canvas, x, y);
 
-    xTaskCreatePinnedToCore(map_task, "daynight_map", 8192, NULL, 1, NULL, MAP_TASK_CORE);
+    s_map_task_stack = (StackType_t *)heap_caps_malloc(MAP_TASK_STACK_BYTES, MALLOC_CAP_SPIRAM);
+    if (s_map_task_stack) {
+        xTaskCreateStaticPinnedToCore(map_task, "daynight_map", MAP_TASK_STACK_BYTES, NULL, 1,
+                                       s_map_task_stack, &s_map_task_tcb, MAP_TASK_CORE);
+    } else {
+        printf("daynight_map: PSRAM stack allocation failed, map won't update\n");
+    }
 
     return ok;
 }
@@ -140,40 +179,22 @@ static void compute_terminator(double subsolar_lat_deg, double subsolar_lon_deg)
     const float sinLat0 = sinf(lat0);
     const float cosLat0 = cosf(lat0);
 
-    // Precompute per-row / per-column trig so the inner loop is a handful
-    // of multiply-adds instead of calling sin/cos 614,400 times.
-    static float sinLatRow[DAYNIGHT_MAP_H];
-    static float cosLatRow[DAYNIGHT_MAP_H];
-    static float cosLonCol[DAYNIGHT_MAP_W];
-    static float sinLonCol[DAYNIGHT_MAP_W];
-    static bool trig_tables_built = false;
-
-    if (!trig_tables_built) {
-        for (int y = 0; y < H; y++) {
-            float lat = deg2radf(90.0f - ((float)y + 0.5f) / H * 180.0f);
-            sinLatRow[y] = sinf(lat);
-            cosLatRow[y] = cosf(lat);
-        }
-        for (int x = 0; x < W; x++) {
-            float lon = deg2radf(((float)x + 0.5f) / W * 360.0f - 180.0f);
-            cosLonCol[x] = cosf(lon);
-            sinLonCol[x] = sinf(lon);
-        }
-        trig_tables_built = true;
-    }
+    // Per-row/per-column trig, precomputed once in daynight_map_init()
+    // into s_sinLatRow/s_cosLatRow/s_cosLonCol/s_sinLonCol (PSRAM) --
+    // avoids calling sin/cos 614,400 times per recompute.
 
     const float cosLon0 = cosf(lon0);
     const float sinLon0 = sinf(lon0);
     const float denom = (COSZ_DAY_EDGE - COSZ_NIGHT_EDGE);
 
     for (int y = 0; y < H; y++) {
-        const float sLat = sinLatRow[y];
-        const float cLat = cosLatRow[y];
+        const float sLat = s_sinLatRow[y];
+        const float cLat = s_cosLatRow[y];
         const uint16_t *baseRow = s_base_buf + (size_t)y * W;
         uint16_t *workRow = s_work_buf + (size_t)y * W;
 
         for (int x = 0; x < W; x++) {
-            float cosDeltaLon = cosLonCol[x] * cosLon0 + sinLonCol[x] * sinLon0;
+            float cosDeltaLon = s_cosLonCol[x] * cosLon0 + s_sinLonCol[x] * sinLon0;
             float cosz = sLat * sinLat0 + cLat * cosLat0 * cosDeltaLon;
 
             uint16_t px = baseRow[x];

@@ -8,6 +8,7 @@
 #include "esp_rom_sys.h" // esp_rom_delay_us
 #include "esp_timer.h" // esp_timer_get_time
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -20,6 +21,16 @@ static const uint32_t FIRST_READ_DELAY_MS = 10UL * 1000UL; // stagger vs the oth
 static const int SENSOR_TASK_CORE = 0; // NOT core 1 -- see env_sensor.h
 
 static lv_obj_t *s_label;
+
+// This task's stack was plain internal RAM (xTaskCreatePinnedToCore's
+// default) -- combined with daynight_map.cpp's own internal-RAM usage,
+// that was part of what pushed internal RAM low enough to make
+// solar_conditions' HTTPS fetch silently time out (see the isolation test
+// in project memory/commit history). Moved to PSRAM, same treatment
+// solar_conditions' and daynight_map's own tasks already got.
+static const size_t SENSOR_TASK_STACK_BYTES = 4096;
+static StackType_t *s_sensor_task_stack = NULL;
+static StaticTask_t s_sensor_task_tcb;
 
 // While tuning the raw-symbol decode below, dump every captured symbol
 // so the actual hardware alignment can be read off the serial log
@@ -212,5 +223,11 @@ void env_sensor_init(lv_obj_t *parent, int x, int y) {
     lv_obj_set_style_pad_hor(s_label, 6, 0);
     lv_obj_set_style_pad_ver(s_label, 2, 0);
 
-    xTaskCreatePinnedToCore(sensor_task, "dht11", 4096, NULL, 1, NULL, SENSOR_TASK_CORE);
+    s_sensor_task_stack = (StackType_t *)heap_caps_malloc(SENSOR_TASK_STACK_BYTES, MALLOC_CAP_SPIRAM);
+    if (s_sensor_task_stack) {
+        xTaskCreateStaticPinnedToCore(sensor_task, "dht11", SENSOR_TASK_STACK_BYTES, NULL, 1,
+                                       s_sensor_task_stack, &s_sensor_task_tcb, SENSOR_TASK_CORE);
+    } else {
+        ESP_LOGW(TAG, "PSRAM stack allocation failed, DHT11 won't be read");
+    }
 }
