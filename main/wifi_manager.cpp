@@ -9,6 +9,7 @@
 #include "esp_netif_sntp.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -32,6 +33,35 @@ static esp_netif_t *s_sta_netif = NULL;
 // failures.
 static int s_disconnect_count = 0;
 static const int WIFI_RESTART_THRESHOLD = 15; // ~15 retries at the driver's own ~3-4s reconnect cadence, roughly 50-60s of continuous disconnection
+
+// The retry-every-~3.4s cadence above turned out to have a real downside:
+// confirmed on real hardware (2026-09-04) that during an extended outage,
+// this hammered the AP with a reconnect attempt every ~3.4 seconds for
+// several minutes straight, across two full stack restarts, and the
+// device never got back into the router's client list at all -- not
+// "connected but no internet", genuinely absent, as if the AP were
+// ignoring/dropping it. The user's phone stayed connected the entire
+// time on the same router (an ISP-provided EuroDOCSIS cable gateway,
+// 2.4GHz only, no 5GHz to fall back to), so this wasn't a real network
+// outage -- the leading theory is the router's own WiFi firmware
+// rate-limiting or temporarily blocking a client that reconnects this
+// aggressively. Backing off exponentially (instead of retrying at a
+// constant fast cadence forever) is a lot less likely to look like abuse
+// to a consumer-grade router's firmware.
+static esp_timer_handle_t s_reconnect_timer = NULL;
+
+static uint32_t reconnect_backoff_ms(int disconnect_count) {
+    if (disconnect_count <= 3) return 0; // first few retries: same fast behavior as before, for ordinary transient blips
+    int shift = disconnect_count - 4;
+    if (shift > 5) shift = 5; // caps growth at 1000 * 2^5 = 32000, clamped to 30000 below anyway
+    uint32_t delay_ms = 1000UL << shift; // 1s, 2s, 4s, 8s, 16s, 30s(capped)...
+    return delay_ms > 30000UL ? 30000UL : delay_ms;
+}
+
+static void reconnect_timer_cb(void *arg) {
+    (void)arg;
+    esp_wifi_connect();
+}
 
 // solar_conditions' hamqsl.com fetch fails 100% of the time with a DNS
 // lookup error (esp-tls: getaddrinfo() returns 202 = EAI_FAIL) even though
@@ -81,14 +111,18 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         s_connected = false;
         xEventGroupClearBits(s_wifi_event_group, CONNECTED_BIT);
         s_disconnect_count++;
-        ESP_LOGW(TAG, "WiFi disconnected (attempt %d), retrying...", s_disconnect_count);
+        uint32_t delay_ms = reconnect_backoff_ms(s_disconnect_count);
+        ESP_LOGW(TAG, "WiFi disconnected (attempt %d), retrying in %u ms...", s_disconnect_count, (unsigned)delay_ms);
         if (s_disconnect_count >= WIFI_RESTART_THRESHOLD) {
             ESP_LOGW(TAG, "Still disconnected after %d attempts -- restarting the WiFi stack", s_disconnect_count);
             s_disconnect_count = 0;
             esp_wifi_stop();
             esp_wifi_start(); // re-triggers WIFI_EVENT_STA_START below, which calls esp_wifi_connect() again
+        } else if (delay_ms == 0) {
+            esp_wifi_connect(); // first few retries: same fast behavior as before, for ordinary transient blips
         } else {
-            esp_wifi_connect(); // keep retrying in the background, same as the Arduino build's loop() check
+            esp_timer_stop(s_reconnect_timer); // defensive -- harmless if it wasn't already running
+            esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000ULL);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
@@ -102,6 +136,11 @@ static void event_handler(void *arg, esp_event_base_t event_base,
 }
 
 void wifi_manager_init(void) {
+    esp_timer_create_args_t reconnect_timer_args = {};
+    reconnect_timer_args.callback = &reconnect_timer_cb;
+    reconnect_timer_args.name = "wifi_reconnect";
+    ESP_ERROR_CHECK(esp_timer_create(&reconnect_timer_args, &s_reconnect_timer));
+
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());

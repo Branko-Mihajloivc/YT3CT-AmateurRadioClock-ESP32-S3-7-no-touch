@@ -243,6 +243,29 @@ static void compute_terminator(double subsolar_lat_deg, double subsolar_lon_deg)
     draw_sun_marker(s_work_buf, sx, sy);
 }
 
+// Retries esp_lv_adapter_lock()+lv_obj_invalidate()+unlock until it
+// actually succeeds, instead of giving up after one short-timeout
+// attempt. Confirmed on real hardware (2026-09-03) that a single 100-
+// 200ms attempt genuinely times out with some regularity -- when that
+// happens for the full-screen invalidate below, one of the two physical
+// buffers never gets told to redraw and keeps showing the previous
+// terminator position until the next cycle (60s later) happens to
+// succeed; the exact visual symptom this produces wasn't fully pinned
+// down, but the desync itself is real and directly logged. Bounded
+// retry count so a genuinely stuck lock can't hang this task forever.
+static bool lock_and_invalidate(lv_obj_t *obj, const char *what) {
+    (void)what;
+    for (int attempt = 0; attempt < 20; attempt++) {
+        if (esp_lv_adapter_lock(100) == ESP_OK) {
+            lv_obj_invalidate(obj);
+            esp_lv_adapter_unlock();
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return false;
+}
+
 static void map_task(void *arg) {
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(FIRST_UPDATE_DELAY_MS));
@@ -255,11 +278,8 @@ static void map_task(void *arg) {
         sun_subsolar_point(&utc_tm, &lat0, &lon0);
         compute_terminator(lat0, lon0); // heavy, no lock held -- see the comment on compute_terminator() for why this is safe
 
-        if (esp_lv_adapter_lock(200) == ESP_OK) {
-            lv_obj_invalidate(s_canvas);
-            esp_lv_adapter_unlock();
-        } else {
-            printf("daynight_map: lock timeout at canvas invalidate (uptime %lld ms)\n", (long long)(esp_timer_get_time() / 1000));
+        if (!lock_and_invalidate(s_canvas, "canvas invalidate")) {
+            printf("daynight_map: canvas invalidate never acquired the lock (uptime %lld ms)\n", (long long)(esp_timer_get_time() / 1000));
         }
         city_clocks_update_sun_times(&utc_tm); // same once-a-minute cadence as the terminator; own brief lock use internally
 
@@ -271,12 +291,21 @@ static void map_task(void *arg) {
         // released between them so the render task actually gets to flip
         // in between) get both buffers to agree on this update's real
         // content.
+        //
+        // A single short-timeout attempt here used to just give up and
+        // log a warning -- confirmed on real hardware (2026-09-03) that
+        // this genuinely happens, repeatedly, and each failure leaves one
+        // physical buffer showing the previous minute's terminator
+        // position until the next cycle 60s later happens to succeed.
+        // Visually this is a flickering/jumping terminator position (the
+        // two buffers disagreeing) or a stray artifact until it
+        // self-corrects -- both confirmed live against this exact log
+        // line. Retrying until it actually succeeds (bounded, so a truly
+        // stuck lock can't hang this task forever) fixes it properly
+        // instead of accepting the desync and waiting for luck.
         for (int i = 0; i < 2; i++) {
-            if (esp_lv_adapter_lock(100) == ESP_OK) {
-                lv_obj_invalidate(lv_scr_act());
-                esp_lv_adapter_unlock();
-            } else {
-                printf("daynight_map: lock timeout at full-screen invalidate #%d (uptime %lld ms)\n", i, (long long)(esp_timer_get_time() / 1000));
+            if (!lock_and_invalidate(lv_scr_act(), "full-screen invalidate")) {
+                printf("daynight_map: full-screen invalidate #%d never acquired the lock after retrying (uptime %lld ms)\n", i, (long long)(esp_timer_get_time() / 1000));
             }
             vTaskDelay(pdMS_TO_TICKS(20));
         }
