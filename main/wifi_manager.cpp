@@ -5,6 +5,7 @@
 
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_system.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_log.h"
@@ -33,6 +34,19 @@ static esp_netif_t *s_sta_netif = NULL;
 // failures.
 static int s_disconnect_count = 0;
 static const int WIFI_RESTART_THRESHOLD = 15; // ~15 retries at the driver's own ~3-4s reconnect cadence, roughly 50-60s of continuous disconnection
+
+// Confirmed on real hardware (2026-09-04): esp_wifi_stop()/esp_wifi_start()
+// alone is NOT enough to clear a genuinely stuck driver state -- watched it
+// cycle through the restart-threshold path 9 times in a row (~40 minutes),
+// failing with the identical init->auth->init rejection every single time,
+// device absent from the router's client list throughout. The only thing
+// that has ever cleared this in the past was a full power cycle -- i.e. a
+// completely fresh boot, not just restarting the driver in place. So after
+// a couple stack-restart cycles still haven't worked, stop trying to be
+// clever and just reboot the whole device, matching what's actually been
+// observed to work.
+static int s_stack_restart_count = 0;
+static const int WIFI_REBOOT_THRESHOLD = 2; // ~2 stack restarts (~3-5 min of continuous failure) before giving up and rebooting
 
 // The retry-every-~3.4s cadence above turned out to have a real downside:
 // confirmed on real hardware (2026-09-04) that during an extended outage,
@@ -114,8 +128,13 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         uint32_t delay_ms = reconnect_backoff_ms(s_disconnect_count);
         ESP_LOGW(TAG, "WiFi disconnected (attempt %d), retrying in %u ms...", s_disconnect_count, (unsigned)delay_ms);
         if (s_disconnect_count >= WIFI_RESTART_THRESHOLD) {
-            ESP_LOGW(TAG, "Still disconnected after %d attempts -- restarting the WiFi stack", s_disconnect_count);
             s_disconnect_count = 0;
+            s_stack_restart_count++;
+            if (s_stack_restart_count >= WIFI_REBOOT_THRESHOLD) {
+                ESP_LOGE(TAG, "Still disconnected after %d WiFi stack restarts -- rebooting the device", s_stack_restart_count);
+                esp_restart();
+            }
+            ESP_LOGW(TAG, "Still disconnected after %d attempts -- restarting the WiFi stack (restart #%d)", WIFI_RESTART_THRESHOLD, s_stack_restart_count);
             esp_wifi_stop();
             esp_wifi_start(); // re-triggers WIFI_EVENT_STA_START below, which calls esp_wifi_connect() again
         } else if (delay_ms == 0) {
@@ -129,6 +148,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "WiFi connected, IP=" IPSTR, IP2STR(&event->ip_info.ip));
         s_connected = true;
         s_disconnect_count = 0;
+        s_stack_restart_count = 0;
         xEventGroupSetBits(s_wifi_event_group, CONNECTED_BIT);
         apply_public_dns(); // DHCP just (re)set its own DNS servers -- override them every time, not just once
         start_sntp_once(); // only needs doing once -- SNTP keeps itself in sync afterward
