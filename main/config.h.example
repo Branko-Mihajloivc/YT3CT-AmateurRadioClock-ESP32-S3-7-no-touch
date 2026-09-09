@@ -7,6 +7,12 @@
 // ---- Callsign shown in the top bar ----
 #define CALLSIGN "YOUR_CALLSIGN"
 
+// ---- Callsign the boot-screen birthday greeting is signed "- " with ----
+// (only relevant if you're building this as a gift for someone else -- set
+// it to your own callsign so the greeting is signed by you, not the
+// recipient whose callsign is in CALLSIGN above)
+#define GIFTER_CALLSIGN "YOUR_CALLSIGN"
+
 // ---- WiFi (needed once at boot to fetch the time over NTP) ----
 #define WIFI_SSID     "your-wifi-ssid"
 #define WIFI_PASSWORD "your-wifi-password"

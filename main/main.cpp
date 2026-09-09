@@ -100,12 +100,14 @@ static void show_boot_screen() {
         lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
 
         lv_obj_t *to_label = lv_label_create(scr);
-        lv_obj_set_style_text_color(to_label, lv_color_make(180, 180, 180), 0);
-#if LV_FONT_MONTSERRAT_30
+        lv_obj_set_style_text_color(to_label, lv_color_white(), 0);
+#if LV_FONT_MONTSERRAT_48
+        lv_obj_set_style_text_font(to_label, &lv_font_montserrat_48, 0);
+#elif LV_FONT_MONTSERRAT_30
         lv_obj_set_style_text_font(to_label, &lv_font_montserrat_30, 0);
 #endif
-        lv_label_set_text(to_label, "Dragom prijatelju YT3SM,");
-        lv_obj_align(to_label, LV_ALIGN_CENTER, 0, -150);
+        lv_label_set_text(to_label, CALLSIGN);
+        lv_obj_align(to_label, LV_ALIGN_CENTER, 0, -160);
 
         lv_obj_t *title_label = lv_label_create(scr);
         lv_obj_set_style_text_color(title_label, lv_color_white(), 0);
@@ -133,7 +135,7 @@ static void show_boot_screen() {
 #if LV_FONT_MONTSERRAT_30
         lv_obj_set_style_text_font(from_label, &lv_font_montserrat_30, 0);
 #endif
-        lv_label_set_text(from_label, "- " CALLSIGN);
+        lv_label_set_text(from_label, GIFTER_CALLSIGN);
         lv_obj_align(from_label, LV_ALIGN_CENTER, 0, 140);
 
         esp_lv_adapter_unlock();
