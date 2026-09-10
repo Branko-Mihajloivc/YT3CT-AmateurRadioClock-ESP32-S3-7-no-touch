@@ -4,8 +4,9 @@
  * NCDXF/IARU International Beacon Project readout: which of the 18
  * beacon stations is transmitting on each of the 5 HF beacon frequencies
  * right now. No network, no ephemeris table -- purely a function of the
- * clock's own accurate time, verified against a real working ham-radio
- * clock project's (HamClock) implementation of the same schedule:
+ * clock's own accurate time, verified against a real working open-source
+ * ham-radio clock project's implementation of the same schedule (see
+ * README's Acknowledgements for the citation):
  *
  *   slot = floor(epoch_seconds / 10) % 18
  *   beacon on 14.100 MHz = BEACONS[slot]

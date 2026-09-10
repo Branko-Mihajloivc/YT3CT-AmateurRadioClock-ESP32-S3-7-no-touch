@@ -16,7 +16,7 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
-# Halved from the vendor demo's 64KB default -- GeochronClock's own UI is
+# Halved from the vendor demo's 64KB default -- this project's own UI is
 # ~40 simple labels + one canvas (whose big pixel buffers are already
 # separately in PSRAM via heap_caps_malloc, not LVGL's own pool), nowhere
 # near enough to need 64KB. Freed room was needed: WiFi's own init wants
@@ -40,7 +40,7 @@ CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_16=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
-# GeochronClock's top bar and boot screen need 30/48pt -- not enabled by
+# This project's top bar and boot screen need 30/48pt -- not enabled by
 # the vendor demo's defaults.
 CONFIG_LV_FONT_MONTSERRAT_30=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
@@ -106,7 +106,7 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # PSRAM instead (see the static task creation in solar_conditions.cpp).
 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
-# GeochronClock uses two NTP servers (primary + fallback), matching the
+# This project uses two NTP servers (primary + fallback), matching the
 # Arduino build's NTP_SERVER_1/NTP_SERVER_2 in config.h.
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
 

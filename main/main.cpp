@@ -1,5 +1,5 @@
 /*****************************************************************************
- * main.cpp -- GeochronClock, ESP-IDF port
+ * main.cpp -- AmateurRadioClock, ESP-IDF port
  *
  * Ported from the original Arduino-framework build of this project after
  * an extensive elimination test traced a persistent display jitter/
@@ -56,7 +56,7 @@ extern "C" {
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "geochronclock";
+static const char *TAG = "amateurradioclock";
 
 // Screen regions (1024x600 total). The map (DAYNIGHT_MAP_W/H in
 // daynight_map.h) fills the entire screen; the top bar, band-conditions
@@ -402,7 +402,7 @@ extern "C" void app_main(void)
     // core-0 task.
     refresh_clocks();
 
-    ESP_LOGI(TAG, "GeochronClock (ESP-IDF port, phase 2) running");
+    ESP_LOGI(TAG, "AmateurRadioClock (ESP-IDF port, phase 2) running");
 
     // app_main() just keeps running as this project's per-second tick,
     // same cadence as the Arduino build's loop().

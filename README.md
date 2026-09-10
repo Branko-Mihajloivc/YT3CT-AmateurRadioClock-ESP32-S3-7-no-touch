@@ -1,6 +1,6 @@
-# GeochronClock (ESP-IDF)
+# AmateurRadioClock (ESP-IDF)
 
-A Geochron-style world clock for the Waveshare ESP32-S3-Touch-LCD-7B (1024x600 RGB panel), built for ham radio operators. Runs natively on ESP-IDF rather than the Arduino framework -- the framework's scheduling overhead was found to eat into the RGB panel's scan-out timing margin badly enough to cause visible display jitter that no pixel-clock tuning could fully resolve. Removing that overhead (native ESP-IDF, no Arduino) fixed it.
+A day/night world clock for the Waveshare ESP32-S3-Touch-LCD-7B (1024x600 RGB panel), built for ham radio operators. Runs natively on ESP-IDF rather than the Arduino framework -- the framework's scheduling overhead was found to eat into the RGB panel's scan-out timing margin badly enough to cause visible display jitter that no pixel-clock tuning could fully resolve. Removing that overhead (native ESP-IDF, no Arduino) fixed it.
 
 ## Features
 
@@ -45,4 +45,6 @@ Per-device settings (WiFi credentials, callsign, timezone, city list) live in `m
 
 ## Acknowledgements
 
-Ported from Waveshare's ESP-IDF LVGL demo for this board. Beacon schedule timing verified against the [HamClock](https://github.com/SmittyHalibut/HamClock) project's implementation of the same NCDXF schedule.
+Ported from Waveshare's ESP-IDF LVGL demo for this board. Beacon schedule timing verified against an existing open-source ham-radio clock project's implementation of the same NCDXF schedule: [SmittyHalibut/HamClock](https://github.com/SmittyHalibut/HamClock).
+
+This project is not affiliated with, endorsed by, or associated with Geochron, Geochronmap, or HamClock -- it is an independent build inspired by the general concept those projects/products popularized (a world map with a live day/night terminator for ham radio use). Any resemblance in naming has been intentionally avoided; Geochron and Geochronmap in particular are trademarks of their respective owners.

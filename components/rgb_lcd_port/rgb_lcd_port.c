@@ -133,10 +133,10 @@ esp_err_t waveshare_esp32_s3_rgb_lcd_init(esp_lv_adapter_tear_avoid_mode_t tear_
             .mirror_y = 0,
         },
     };
-    // GeochronClock note: this specific board is a non-touch build (no
-    // GT911 glass populated), so this always fails on real hardware here.
-    // Not fatal -- leave *out_touch_handle NULL and keep going, matching
-    // how GeochronClock's own esp_lv_adapter_arduino.cpp already treats a
+    // Note: this specific board is a non-touch build (no GT911 glass
+    // populated), so this always fails on real hardware here. Not fatal --
+    // leave *out_touch_handle NULL and keep going, matching how the
+    // Arduino-era build's esp_lv_adapter_arduino.cpp already treats a
     // NULL touch handle.
     esp_err_t touch_err = esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, out_touch_handle);
     if (touch_err != ESP_OK) {

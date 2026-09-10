@@ -2,7 +2,7 @@
  * daynight_map.h
  *
  * Owns the LVGL canvas that shows the world map with a live day/night
- * terminator, Geochron-style. Fills the full screen -- the top bar,
+ * terminator overlay. Fills the full screen -- the top bar,
  * band-conditions column, and city-clocks bar float as text directly on
  * top of it (see main.cpp), with no background of their own. Two RGB565
  * framebuffers live in PSRAM: `base_buf` is the pristine map (loaded once
@@ -50,6 +50,6 @@
  * @param sd_available  Pass true only if sd_mmc_init() already succeeded.
  * @return true if the map image was found and loaded; false if a
  *         placeholder background was used instead (check this and warn
- *         the user -- see GeochronClock.ino).
+ *         the user).
  */
 bool daynight_map_init(lv_obj_t *parent, int x, int y, bool sd_available);

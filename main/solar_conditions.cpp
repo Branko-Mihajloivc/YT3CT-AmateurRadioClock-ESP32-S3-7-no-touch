@@ -344,7 +344,7 @@ static void poll_once() {
     // a User-Agent alone didn't fix it either. Explicitly offering the
     // same ALPN ("http/1.1") curl negotiated, in case the WAF treats a
     // no-ALPN TLS handshake as suspicious/bot-like.
-    config.user_agent = "GeochronClock/1.0 (ESP32-S3)";
+    config.user_agent = "AmateurRadioClock/1.0 (ESP32-S3)";
     static const char *alpn_list[] = {"http/1.1", NULL};
     config.alpn_protos = alpn_list;
     // SOLAR_XML_URL is a raw IP (see comment above) -- common_name tells
