@@ -64,6 +64,36 @@ static const int WIFI_REBOOT_THRESHOLD = 2; // ~2 stack restarts (~3-5 min of co
 // to a consumer-grade router's firmware.
 static esp_timer_handle_t s_reconnect_timer = NULL;
 
+// Learned the hard way (2026-09-10): this board's enclosure gets glued shut
+// before every config.h detail gets triple-checked, and a wrong WIFI_SSID/
+// WIFI_PASSWORD could otherwise stay silently wrong with no easy way back
+// in short of finding another physical port. Cycling through a small list
+// of known networks on every reconnect attempt means a wrong/unreachable
+// primary network doesn't strand the device -- it'll fall back to trying
+// the other one(s) instead of retrying the same dead network forever.
+typedef struct {
+    const char *ssid;
+    const char *password;
+} wifi_credential_t;
+
+static const wifi_credential_t WIFI_CREDENTIALS[] = {
+    { WIFI_SSID, WIFI_PASSWORD },
+    { WIFI_SSID_FALLBACK, WIFI_PASSWORD_FALLBACK },
+    { WIFI_SSID_FALLBACK2, WIFI_PASSWORD_FALLBACK2 },
+};
+static const int NUM_WIFI_CREDENTIALS = sizeof(WIFI_CREDENTIALS) / sizeof(WIFI_CREDENTIALS[0]);
+static int s_wifi_cred_index = 0;
+
+static void apply_wifi_credential(int index) {
+    const wifi_credential_t *cred = &WIFI_CREDENTIALS[index];
+    wifi_config_t wifi_config = {};
+    strncpy((char *)wifi_config.sta.ssid, cred->ssid, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, cred->password, sizeof(wifi_config.sta.password) - 1);
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_LOGI(TAG, "Using WiFi network %d/%d: '%s'", index + 1, NUM_WIFI_CREDENTIALS, cred->ssid);
+}
+
 static uint32_t reconnect_backoff_ms(int disconnect_count) {
     if (disconnect_count <= 3) return 0; // first few retries: same fast behavior as before, for ordinary transient blips
     int shift = disconnect_count - 4;
@@ -125,6 +155,10 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         s_connected = false;
         xEventGroupClearBits(s_wifi_event_group, CONNECTED_BIT);
         s_disconnect_count++;
+        if (NUM_WIFI_CREDENTIALS > 1) {
+            s_wifi_cred_index = (s_wifi_cred_index + 1) % NUM_WIFI_CREDENTIALS;
+            apply_wifi_credential(s_wifi_cred_index);
+        }
         uint32_t delay_ms = reconnect_backoff_ms(s_disconnect_count);
         ESP_LOGW(TAG, "WiFi disconnected (attempt %d), retrying in %u ms...", s_disconnect_count, (unsigned)delay_ms);
         if (s_disconnect_count >= WIFI_RESTART_THRESHOLD) {
@@ -184,13 +218,9 @@ void wifi_manager_init(void) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, NULL));
 
-    wifi_config_t wifi_config = {};
-    strncpy((char *)wifi_config.sta.ssid, WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, WIFI_PASSWORD, sizeof(wifi_config.sta.password) - 1);
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    s_wifi_cred_index = 0;
+    apply_wifi_credential(s_wifi_cred_index);
     ESP_ERROR_CHECK(esp_wifi_start());
 
     // Default modem-sleep power save periodically sends null-data-frame

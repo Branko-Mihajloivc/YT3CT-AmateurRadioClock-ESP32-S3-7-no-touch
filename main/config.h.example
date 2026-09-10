@@ -17,6 +17,16 @@
 #define WIFI_SSID     "your-wifi-ssid"
 #define WIFI_PASSWORD "your-wifi-password"
 
+// ---- Fail-safe fallback WiFi networks, tried automatically in order if
+// the primary above isn't reachable (wrong password, out of range, etc.) --
+// recommended if this is going somewhere you won't have easy physical
+// access to it later ----
+#define WIFI_SSID_FALLBACK     "your-fallback-wifi-ssid"
+#define WIFI_PASSWORD_FALLBACK "your-fallback-wifi-password"
+
+#define WIFI_SSID_FALLBACK2     "your-second-fallback-wifi-ssid"
+#define WIFI_PASSWORD_FALLBACK2 "your-second-fallback-wifi-password"
+
 // ---- NTP ----
 #define NTP_SERVER_1 "pool.ntp.org"
 #define NTP_SERVER_2 "time.nist.gov"
